@@ -36,18 +36,67 @@ jobs:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
           mkdir -p output
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o ./output/GeoLite2-ASN-CSV.zip
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-Country.tar.gz
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o ./output/GeoLite2-Country-CSV.zip
+          
+          # Download with retry and verification
+          download_file() {
+            local url=$1
+            local output=$2
+            local max_attempts=3
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt: Downloading $output"
+              if curl -fSL "$url" -o "$output"; then
+                # Check if file is not empty
+                if [ -s "$output" ]; then
+                  echo "Successfully downloaded $output"
+                  return 0
+                else
+                  echo "Downloaded file is empty, retrying..."
+                fi
+              else
+                echo "Download failed, retrying..."
+              fi
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+            
+            echo "Failed to download $output after $max_attempts attempts"
+            return 1
+          }
+          
+          download_file "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" "./output/GeoLite2-ASN.tar.gz"
+          download_file "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN-CSV&license_key=${LICENSE_KEY}&suffix=zip" "./output/GeoLite2-ASN-CSV.zip"
+          download_file "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" "./output/GeoLite2-Country.tar.gz"
+          download_file "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=${LICENSE_KEY}&suffix=zip" "./output/GeoLite2-Country-CSV.zip"
+          
+          # Verify downloaded files
+          echo "Verifying downloaded files..."
+          ls -lh ./output/
 
       - name: Prepare GeoLite2 databases
         run: |
+          # Verify files exist and have content
+          for file in GeoLite2-ASN.tar.gz GeoLite2-ASN-CSV.zip GeoLite2-Country.tar.gz GeoLite2-Country-CSV.zip; do
+            if [ ! -s "./output/$file" ]; then
+              echo "Error: $file is missing or empty"
+              exit 1
+            fi
+          done
+          
           cp ./output/{*.gz,*.zip} ./
-          unzip GeoLite2-Country-CSV.zip
-          unzip GeoLite2-ASN-CSV.zip
-          tar -xvzf GeoLite2-Country.tar.gz
-          tar -xvzf GeoLite2-ASN.tar.gz
+          
+          echo "Extracting Country CSV..."
+          unzip -q GeoLite2-Country-CSV.zip || { echo "Failed to extract Country CSV"; exit 1; }
+          
+          echo "Extracting ASN CSV..."
+          unzip -q GeoLite2-ASN-CSV.zip || { echo "Failed to extract ASN CSV"; exit 1; }
+          
+          echo "Extracting Country tar.gz..."
+          tar -xzf GeoLite2-Country.tar.gz || { echo "Failed to extract Country tar.gz"; exit 1; }
+          
+          echo "Extracting ASN tar.gz..."
+          tar -xzf GeoLite2-ASN.tar.gz || { echo "Failed to extract ASN tar.gz"; exit 1; }
 
           cp GeoLite2-Country_*/*.mmdb ./output/
           cp GeoLite2-ASN_*/*.mmdb ./output/
@@ -57,6 +106,8 @@ jobs:
           mkdir -p geolite2
           cp GeoLite2-Country-CSV_*/*.csv ./geolite2/
           cp GeoLite2-ASN-CSV_*/*.csv ./geolite2/
+          
+          echo "Preparation completed successfully"
 
       - name: Rename ASN database
         run: |
