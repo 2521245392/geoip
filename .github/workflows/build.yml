@@ -58,6 +58,11 @@ jobs:
           cp GeoLite2-Country-CSV_*/*.csv ./geolite2/
           cp GeoLite2-ASN-CSV_*/*.csv ./geolite2/
 
+      - name: Rename ASN database
+        run: |
+          cd ./output || exit 1
+          mv GeoLite2-ASN.mmdb ASN.mmdb
+
       - name: Build geoip files
         run: |
           go build ./
@@ -69,13 +74,6 @@ jobs:
           go install -v github.com/maxmind/mmdbverify@latest
           for name in $(ls *.mmdb); do
             $(go env GOPATH)/bin/mmdbverify -file ${name}
-          done
-
-      - name: Generate sha256 checksum for dat files
-        run: |
-          cd ./output || exit 1
-          for name in $(ls *.dat); do
-            sha256sum ${name} > ./${name}.sha256sum
           done
 
       - name: Generate sha256 checksum for mmdb files
@@ -108,9 +106,6 @@ jobs:
         run: |
           rm -rf ./output/*.{gz,zip}
           rm -rf ./output/GeoLite2-*.csv
-          rm -rf ./output/GeoLite2-*.mmdb
-          rm -rf ./output/GeoLite2-*.sha256sum
-          rm -rf ./output/{clash,dat,mrs,nginx,srs,surge,text}
 
       - name: Upload files to GitHub release
         uses: svenstaro/upload-release-action@v2
