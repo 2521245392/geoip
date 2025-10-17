@@ -109,15 +109,15 @@ jobs:
           
           echo "Preparation completed successfully"
 
-      - name: Rename ASN database
+      - name: Rename databases
         run: |
           cd ./output || exit 1
+          mv GeoLite2-Country.mmdb Country.mmdb
           mv GeoLite2-ASN.mmdb ASN.mmdb
 
       - name: Build geoip files
         run: |
-          go build ./
-          ./geoip convert -c ./config.json
+          echo "Skipping custom build, using original GeoLite2 databases"
 
       - name: Verify mmdb files
         run: |
