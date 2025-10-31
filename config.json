@@ -57,7 +57,7 @@
         "outputDir": "./output",
         "outputName": "Country.mmdb",
         "sourceMMDBURI": "./output/GeoLite2-Country.mmdb",
-        "overwriteList": ["cn", "private"]
+        "wantedList": ["cn", "private"]
       }
     }
   ]
