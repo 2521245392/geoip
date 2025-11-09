@@ -64,6 +64,14 @@ jobs:
           go build ./
           ./geoip convert -c ./config.json
 
+      - name: Clean output directory
+        run: |
+          cd ./output || exit 1
+          # 只保留 ASN.mmdb 和 Country.mmdb
+          find . -name "*.mmdb" ! -name "ASN.mmdb" ! -name "Country.mmdb" -type f -delete
+          # 删除其他不需要的文件
+          rm -f *.csv *.tar.gz *.zip
+
       - name: Verify mmdb files
         run: |
           cd ./output || exit 1
