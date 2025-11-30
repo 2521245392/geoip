@@ -69,29 +69,11 @@
         "uri": "https://raw.githubusercontent.com/metowolf/iplist/master/data/country/CN.txt"
       }
     },
-
     {
       "type": "private",
       "action": "add"
-    },
-
-    // -----------------------------
-    //  ❌ 方式：加入一个 notcn 数据源
-    // -----------------------------
-    {
-      "type": "manual",
-      "action": "add",
-      "args": {
-        "name": "notcn",
-        "data": [
-          "104.28.0.0/15",
-          "104.30.0.0/15"
-        ],
-        "onlyIPType": "ipv4"
-      }
     }
   ],
-
   "output": [
     {
       "type": "maxmindMMDB",
