@@ -70,12 +70,10 @@
       }
     },
     {
-      "type": "merger",
-      "action": "merge",
+      "type": "merge",
+      "action": "add",
       "args": {
-        "wantedList": ["cn"],
-        "deduplicate": true,
-        "optimize": true
+        "wantedList": ["cn"]
       }
     },
     {
@@ -83,11 +81,8 @@
       "action": "remove",
       "args": {
         "wantedList": ["cn"],
-        "onlyIPType": "ipv4",
-        "ipRanges": [
-          "104.28.0.0/16",
-          "104.30.0.0/16"
-        ]
+        "cidrList": ["104.28.0.0/16", "104.30.0.0/16"],
+        "onlyIPType": "ipv4"
       }
     },
     {
