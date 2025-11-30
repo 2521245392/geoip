@@ -70,19 +70,11 @@
       }
     },
     {
-      "type": "merge",
-      "action": "add",
-      "args": {
-        "wantedList": ["cn"]
-      }
-    },
-    {
       "type": "cutter",
       "action": "remove",
       "args": {
         "wantedList": ["cn"],
-        "cidrList": ["104.28.0.0/16", "104.30.0.0/16"],
-        "onlyIPType": "ipv4"
+        "ipv4CIDR": ["104.28.0.0/16", "104.30.0.0/16"]
       }
     },
     {
