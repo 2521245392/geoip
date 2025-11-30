@@ -72,8 +72,25 @@
     {
       "type": "private",
       "action": "add"
+    },
+
+    // -------------------------
+    // 🧹 删除 Cloudflare 段
+    // -------------------------
+    {
+      "type": "cutter",
+      "action": "removePrefix",
+      "args": {
+        "prefixList": [
+          "104.28.0.0/15",
+          "104.30.0.0/15"
+        ],
+        "onlyIPType": "ipv4"
+      }
     }
+
   ],
+
   "output": [
     {
       "type": "maxmindMMDB",
