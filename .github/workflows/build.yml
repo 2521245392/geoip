@@ -48,6 +48,9 @@ jobs:
           | grep -v '^#' \
           | grep '/' \
           | grep -v '^::ffff:' \
+          | grep -v '^104\.28\.' \
+          | grep -v '^2a02:26f7' \
+          | grep -v '^2a09' \
           > ./geolite2/chinamax_cidr.txt
 
           echo "Cleaned CIDR count:"
