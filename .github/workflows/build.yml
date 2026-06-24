@@ -60,6 +60,9 @@ jobs:
           # 3. 安装依赖并运行清洗脚本
           go get github.com/oschwald/geoip2-golang go4.org/netipx
           go run cleaner.go
+
+          # 🔥🔥🔥 关键修复：过河拆桥！运行完立刻删掉清洗脚本，防止干扰后续编译 🔥🔥🔥
+          rm cleaner.go
           
           # 4. 把国内纯净段喂给 config.json 指定的路径
           mkdir -p geolite2
