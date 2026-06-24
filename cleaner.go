@@ -21,10 +21,16 @@ const (
 )
 
 var (
+	// 用于内存中自动去重和完美合并的构建器
 	cleanBuilder    netipx.IPSetBuilder
 	overseasBuilder netipx.IPSetBuilder
-	rejectCount     int
-	approvedASNs    = make(map[uint]bool)
+	
+	// 额外输出的原始文件句柄及计数器
+	rawCleanOut   *os.File
+	rawCleanCount int
+	rejectCount   int
+	
+	approvedASNs = make(map[uint]bool)
 )
 
 func main() {
@@ -49,6 +55,10 @@ func main() {
 		log.Fatalf("无法打开源文件 chinamax_cidr.txt: %v", err)
 	}
 	defer inFile.Close()
+
+	// 创建用于保存“未聚合原始账本”的文件
+	rawCleanOut, _ = os.Create("raw_clean_cn_whitelisted.txt")
+	defer rawCleanOut.Close()
 
 	scanner := bufio.NewScanner(inFile)
 	fmt.Println("🚀 绝对白名单分流引擎已启动，正在执行跨国切割与内存加载...")
@@ -79,26 +89,32 @@ func main() {
 		auditCIDR(ipNet, countryDB, asnDB)
 	}
 
+	// ---------------- 终极聚合与输出阶段 ----------------
 	fmt.Println("🔄 正在执行全局路由聚合、去重与合并压缩...")
 
+	// 1. 构建并输出纯净国内段 (合并去重版，供原项目打包 mmdb 使用)
 	cleanOut, _ := os.Create("clean_cn_whitelisted.txt")
 	cleanSet, _ := cleanBuilder.IPSet()
-	for _, p := range cleanSet.Prefixes() {
+	cleanPrefixes := cleanSet.Prefixes()
+	for _, p := range cleanPrefixes {
 		cleanOut.WriteString(p.String() + "\n")
 	}
 	cleanOut.Close()
 
+	// 2. 构建并输出白名单出海段
 	overseasOut, _ := os.Create("overseas_but_whitelisted.txt")
 	overseasSet, _ := overseasBuilder.IPSet()
-	for _, p := range overseasSet.Prefixes() {
+	overseasPrefixes := overseasSet.Prefixes()
+	for _, p := range overseasPrefixes {
 		overseasOut.WriteString(p.String() + "\n")
 	}
 	overseasOut.Close()
 
 	fmt.Println("\n========================= 聚合过滤最终报告 =========================")
-	fmt.Printf("✅ [放行直连] 国内纯净段 (合并去重后) : %d 条\n", len(cleanSet.Prefixes()))
-	fmt.Printf("⚠️ [隔离代理] 白名单出海段 (合并去重后) : %d 条\n", len(overseasSet.Prefixes()))
-	fmt.Printf("❌ [无情斩杀] 不在白名单内的脏数据拦截次数 : %d 次\n", rejectCount)
+	fmt.Printf("✅ [放行直连] 国内纯净段 (未聚合原始版) : %d 条 (已输出至 raw_clean_cn_whitelisted.txt)\n", rawCleanCount)
+	fmt.Printf("✅ [放行直连] 国内纯净段 (合并去重后)   : %d 条 (已输出至 clean_cn_whitelisted.txt)\n", len(cleanPrefixes))
+	fmt.Printf("⚠️ [隔离代理] 白名单出海段 (合并去重后) : %d 条\n", len(overseasPrefixes))
+	fmt.Printf("❌ [无情斩杀] 脏数据拦截次数            : %d 次\n", rejectCount)
 	fmt.Println("====================================================================")
 }
 
@@ -175,8 +191,13 @@ func pushToPipeline(class int, cidrStr string) {
 	if err != nil {
 		return
 	}
+
 	switch class {
 	case ClassCleanCN:
+		// 1. 直接将原始网段写入 raw_clean_cn_whitelisted.txt
+		rawCleanOut.WriteString(cidrStr + "\n")
+		rawCleanCount++
+		// 2. 同时送入内存构建器，等待后续自动聚合
 		cleanBuilder.AddPrefix(prefix)
 	case ClassOverseas:
 		overseasBuilder.AddPrefix(prefix)
