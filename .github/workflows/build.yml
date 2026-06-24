@@ -32,43 +32,56 @@ jobs:
           echo "RELEASE_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
         shell: bash
 
-      - name: Download GeoLite2 ASN database
+      - name: Download GeoLite2 Databases
         env:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
           mkdir -p output
+          
+          # 下载 ASN 数据库
           curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
           tar -xvzf ./output/GeoLite2-ASN.tar.gz -C ./output
-          mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./output/ASN.mmdb
+          mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
+          cp ./GeoLite2-ASN.mmdb ./output/ASN.mmdb
+          
+          # 下载 Country 数据库供清洗使用
+          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-Country.tar.gz
+          tar -xvzf ./output/GeoLite2-Country.tar.gz -C ./output
+          mv ./output/GeoLite2-Country_*/GeoLite2-Country.mmdb ./GeoLite2-Country.mmdb
 
-      - name: Download and clean ChinaMax IP CIDR
+      - name: Download and deep clean ChinaMax IP CIDR
         run: |
+          # 1. 拉取脏数据
+          curl -sL "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaIPs/ChinaIPs_IP.txt" > chinamax_cidr.txt
+          
+          # 2. 从你提供的 URL 拉取绝对白名单
+          curl -sL "https://shijiu.cc.cd/source_unique_asns.txt" > source_unique_asns.txt
+          
+          # 3. 安装依赖并运行清洗脚本
+          go get github.com/oschwald/geoip2-golang go4.org/netipx
+          go run cleaner.go
+          
+          # 4. 把国内纯净段喂给 config.json 指定的路径
           mkdir -p geolite2
-          curl -sL "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaIPs/ChinaIPs_IP.txt" \
-          | grep -v '^#' \
-          | grep '/' \
-          | grep -v '^::ffff:' \
-          | grep -v '^104\.28\.' \
-          | grep -v '^2a02:26f7' \
-          | grep -v '^2a09' \
-          > ./geolite2/chinamax_cidr.txt
+          mv clean_cn_whitelisted.txt ./geolite2/chinamax_cidr.txt
+          
+          # 5. 保留出海白名单至 release
+          mv overseas_but_whitelisted.txt ./output/ || true
 
           echo "Cleaned CIDR count:"
           wc -l ./geolite2/chinamax_cidr.txt
-
-          # 避免空文件导致构建失败
           test -s ./geolite2/chinamax_cidr.txt
 
       - name: Build Country.mmdb
         run: |
+          # 原项目的打包核心命令保持不变
           go build ./
           ./geoip convert -c ./config.json
 
       - name: Clean output directory
         run: |
           cd ./output || exit 1
-          # 删除其他不需要的文件
-          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" -delete
+          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" ! -name "overseas_but_whitelisted.txt" -delete
 
       - name: Verify mmdb files
         run: |
@@ -117,7 +130,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file_glob: true
-          file: ./output/*.mmdb
+          file: ./output/*
           release_name: ${{ env.RELEASE_NAME }}
           tag: ${{ env.TAG_NAME }}
           overwrite: true
