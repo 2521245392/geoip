@@ -67,7 +67,6 @@ jobs:
           # 4. 把国内纯净段喂给 config.json 指定的路径
           mkdir -p geolite2
           mv clean_cn_whitelisted.txt ./geolite2/chinamax_cidr.txt
-          mv clean_cn_whitelisted.txt ./output/
           
           # 5. 保留出海白名单至 release
           mv overseas_but_whitelisted.txt ./output/ || true
@@ -85,7 +84,7 @@ jobs:
       - name: Clean output directory
         run: |
           cd ./output || exit 1
-          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" ! -name "overseas_but_whitelisted.txt" ! -name "clean_cn_whitelisted.txt" -delete
+          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" ! -name "overseas_but_whitelisted.txt" -delete
           
       - name: Verify mmdb files
         run: |
