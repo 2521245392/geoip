@@ -17,12 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout codebase
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
 
@@ -38,38 +38,117 @@ jobs:
         run: |
           mkdir -p output
           
-          # 下载 ASN 数据库
+          # 下载 ASN 数据库备用
           curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
           tar -xvzf ./output/GeoLite2-ASN.tar.gz -C ./output
           mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
           cp ./GeoLite2-ASN.mmdb ./output/ASN.mmdb
-          
-          # 下载 Country 数据库供清洗使用
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-Country.tar.gz
-          tar -xvzf ./output/GeoLite2-Country.tar.gz -C ./output
-          mv ./output/GeoLite2-Country_*/GeoLite2-Country.mmdb ./GeoLite2-Country.mmdb
 
-      - name: Download and deep clean ChinaMax IP CIDR
+      - name: Fetch Pure Physical China & Private CIDR
         run: |
-          # 1. 拉取脏数据
-          curl -sL "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaIPs/ChinaIPs_IP.txt" > chinamax_cidr.txt
-          
-          # 2. 从你提供的 URL 拉取绝对白名单
-          curl -sL "https://shijiu.cc.cd/source_unique_asns.txt" > source_unique_asns.txt
-          
-          # 3. 安装依赖并运行清洗脚本
-          go get github.com/oschwald/geoip2-golang go4.org/netipx
-          go run cleaner.go
+          mkdir -p ./geolite2
+          mkdir -p ./temp_cidr
 
-          # 🔥🔥🔥 关键修复：过河拆桥！运行完立刻删掉清洗脚本，防止干扰后续编译 🔥🔥🔥
-          rm cleaner.go
-          
-          # 4. 把国内纯净段喂给 config.json 指定的路径
-          mkdir -p geolite2
-          mv clean_cn_whitelisted.txt ./geolite2/chinamax_cidr.txt
-          
-          # 5. 保留出海白名单至 release
-          mv overseas_but_whitelisted.txt ./output/ || true
+          echo "📥 1. 正在拉取国内骨干网 BGP 真实广播的 IPv4 (chnroutes2)..."
+          curl -sL "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt" | grep -v '^#' > ./temp_cidr/cn_ipv4.txt
+
+          echo "📥 2. 正在拉取纯物理大陆运营商 IPv6 路由段..."
+          curl -sL "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt" | grep -v '^#' > ./temp_cidr/cn_ipv6.txt
+
+          echo "📝 3. 正在生成 IPv4 / IPv6 保留与私网 CIDR..."
+          cat << 'EOF' > ./temp_cidr/private_cidr.txt
+          # IPv4 保留与私网
+          0.0.0.0/8
+          10.0.0.0/8
+          100.64.0.0/10
+          127.0.0.0/8
+          169.254.0.0/16
+          172.16.0.0/12
+          192.0.0.0/24
+          192.0.2.0/24
+          192.88.99.0/24
+          192.168.0.0/16
+          198.18.0.0/15
+          198.51.100.0/24
+          203.0.113.0/24
+          224.0.0.0/4
+          240.0.0.0/4
+          255.255.255.255/32
+          # IPv6 保留与私网
+          ::/128
+          ::1/128
+          ::ffff:0:0/96
+          64:ff9b::/96
+          100::/64
+          2001::/32
+          2001:db8::/32
+          fc00::/7
+          fe80::/10
+          ff00::/8
+          EOF
+
+          # 合并原始源
+          cat ./temp_cidr/cn_ipv4.txt ./temp_cidr/cn_ipv6.txt ./temp_cidr/private_cidr.txt > ./temp_cidr/all_raw.txt
+
+          echo "⚙️ 4. 正在执行 IP 验证与聚合 (去重、重叠网段合并)..."
+          go get go4.org/netipx
+
+          cat << 'EOF' > merge.go
+          package main
+
+          import (
+          	"bufio"
+          	"fmt"
+          	"log"
+          	"net/netip"
+          	"os"
+          	"strings"
+
+          	"go4.org/netipx"
+          )
+
+          func main() {
+          	file, err := os.Open("./temp_cidr/all_raw.txt")
+          	if err != nil {
+          		log.Fatalf("打开文件失败: %v", err)
+          	}
+          	defer file.Close()
+
+          	var builder netipx.IPSetBuilder
+          	scanner := bufio.NewScanner(file)
+          	for scanner.Scan() {
+          		line := strings.TrimSpace(scanner.Text())
+          		if line == "" || strings.HasPrefix(line, "#") {
+          			continue
+          		}
+          		prefix, err := netip.ParsePrefix(line)
+          		if err == nil {
+          			builder.AddPrefix(prefix)
+          		}
+          	}
+
+          	ipSet, err := builder.IPSet()
+          	if err != nil {
+          		log.Fatalf("构建 IPSet 失败: %v", err)
+          	}
+
+          	out, err := os.Create("./geolite2/chinamax_cidr.txt")
+          	if err != nil {
+          		log.Fatalf("创建目标文件失败: %v", err)
+          	}
+          	defer out.Close()
+
+          	prefixes := ipSet.Prefixes()
+          	for _, p := range prefixes {
+          		out.WriteString(p.String() + "\n")
+          	}
+          	fmt.Printf("✅ 网段聚合完毕，最终输出纯净段总数: %d\n", len(prefixes))
+          }
+          EOF
+
+          go run merge.go
+          rm merge.go
+          rm -rf ./temp_cidr
 
           echo "Cleaned CIDR count:"
           wc -l ./geolite2/chinamax_cidr.txt
@@ -77,15 +156,14 @@ jobs:
 
       - name: Build Country.mmdb
         run: |
-          # 原项目的打包核心命令保持不变
           go build ./
           ./geoip convert -c ./config.json
 
       - name: Clean output directory
         run: |
           cd ./output || exit 1
-          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" ! -name "overseas_but_whitelisted.txt" -delete
-          
+          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" -delete
+
       - name: Verify mmdb files
         run: |
           cd ./output || exit 1
