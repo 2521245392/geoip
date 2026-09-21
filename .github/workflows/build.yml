@@ -1,8 +1,11 @@
 name: Build geoip files
+
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "0 0 * * 4"
+
   push:
     branches:
       - master
@@ -15,6 +18,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v4
@@ -27,26 +31,29 @@ jobs:
           go-version-file: ./go.mod
 
       - name: Set variables
+        shell: bash
         run: |
           echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
           echo "RELEASE_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
-        shell: bash
 
       - name: Download GeoLite2 Databases
         env:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
           mkdir -p output
-          
-          # 下载 ASN 数据库备用
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
+
+          curl -L \
+            "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" \
+            -o ./output/GeoLite2-ASN.tar.gz
+
           tar -xvzf ./output/GeoLite2-ASN.tar.gz -C ./output
+
           mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
+
           cp ./GeoLite2-ASN.mmdb ./output/ASN.mmdb
 
       - name: Compile geoip binary
         run: |
-          # 提前编译好主程序，直接使用其内置的 merge 功能
           go build -o geoip ./
 
       - name: Fetch and Merge Pure Physical China & Private CIDR
@@ -54,52 +61,72 @@ jobs:
           mkdir -p ./geolite2
           mkdir -p ./temp_cidr
 
-          echo "📥 1. 正在拉取国内骨干网 BGP 真实广播的 IPv4 (chnroutes2)..."
-          curl -sL "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt" | grep -v '^#' > ./temp_cidr/cn_ipv4.txt
+          echo "📥 Download IPv4 China routes..."
+          curl -sL \
+            "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt" \
+            > ./temp_cidr/raw_cn4.txt
 
-          echo "📥 2. 正在拉取纯物理大陆运营商 IPv6 路由段..."
-          curl -sL "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt" | grep -v '^#' > ./temp_cidr/cn_ipv6.txt
+          echo "📥 Download IPv6 China operator routes..."
+          curl -sL \
+            "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt" \
+            > ./temp_cidr/raw_cn6.txt
 
-          echo "📝 3. 正在生成 IPv4 / IPv6 保留与私网 CIDR..."
-          cat << 'EOF' > ./temp_cidr/private_cidr.txt
-          # IPv4 保留与私网
-          0.0.0.0/8
-          10.0.0.0/8
-          100.64.0.0/10
-          127.0.0.0/8
-          169.254.0.0/16
-          172.16.0.0/12
-          192.0.0.0/24
-          192.0.2.0/24
-          192.88.99.0/24
-          192.168.0.0/16
-          198.18.0.0/15
-          198.51.100.0/24
-          203.0.113.0/24
-          224.0.0.0/4
-          240.0.0.0/4
-          255.255.255.255/32
-          # IPv6 保留与私网
-          ::/128
-          ::1/128
-          ::ffff:0:0/96
-          64:ff9b::/96
-          100::/64
-          2001::/32
-          2001:db8::/32
-          fc00::/7
-          fe80::/10
-          ff00::/8
-          EOF
+          echo "📝 Generate private CIDR list..."
 
-          echo "⚙️ 4. 通过管道直接调用内置的 ./geoip merge 进行原生聚合..."
-          # 将所有段通过管道送入 ./geoip merge，处理后直接重定向写入目标文件
-          cat ./temp_cidr/cn_ipv4.txt ./temp_cidr/cn_ipv6.txt ./temp_cidr/private_cidr.txt | ./geoip merge > ./geolite2/chinamax_cidr.txt
+          cat << 'EOF' > ./temp_cidr/raw_private.txt
+0.0.0.0/8
+10.0.0.0/8
+100.64.0.0/10
+127.0.0.0/8
+169.254.0.0/16
+172.16.0.0/12
+192.0.0.0/24
+192.0.2.0/24
+192.88.99.0/24
+192.168.0.0/16
+198.18.0.0/15
+198.51.100.0/24
+203.0.113.0/24
+224.0.0.0/4
+240.0.0.0/4
+255.255.255.255/32
+::/128
+::1/128
+::ffff:0:0/96
+64:ff9b::/96
+100::/64
+2001::/32
+2001:db8::/32
+fc00::/7
+fe80::/10
+ff00::/8
+EOF
+
+          echo "🧹 Clean CIDR list..."
+
+          cat \
+            ./temp_cidr/raw_cn4.txt \
+            ./temp_cidr/raw_cn6.txt \
+            ./temp_cidr/raw_private.txt \
+          | sed 's/[[:space:]]//g' \
+          | grep -v '^#' \
+          | grep -v '^$' \
+          > ./temp_cidr/all_clean.txt
+
+          echo "CIDR count:"
+          wc -l ./temp_cidr/all_clean.txt
+
+          echo "⚙️ Merge CIDR..."
+
+          ./geoip merge \
+            < ./temp_cidr/all_clean.txt \
+            > ./geolite2/chinamax_cidr.txt
 
           rm -rf ./temp_cidr
 
-          echo "Cleaned CIDR count:"
+          echo "Merged CIDR count:"
           wc -l ./geolite2/chinamax_cidr.txt
+
           test -s ./geolite2/chinamax_cidr.txt
 
       - name: Build Country.mmdb
@@ -109,40 +136,58 @@ jobs:
       - name: Clean output directory
         run: |
           cd ./output || exit 1
-          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" -delete
+
+          find . \
+            -type f \
+            ! -name "ASN.mmdb" \
+            ! -name "Country.mmdb" \
+            -delete
 
       - name: Verify mmdb files
         run: |
           cd ./output || exit 1
+
           go install -v github.com/maxmind/mmdbverify@latest
+
           for name in $(ls *.mmdb); do
-            $(go env GOPATH)/bin/mmdbverify -file ${name}
+            $(go env GOPATH)/bin/mmdbverify -file "${name}"
           done
 
       - name: Generate sha256 checksum
         run: |
           cd ./output || exit 1
+
           for name in $(ls *.mmdb); do
-            sha256sum ${name} > ./${name}.sha256sum
+            sha256sum "${name}" > "./${name}.sha256sum"
           done
 
-      - name: Git push assets to "release" branch
+      - name: Git push assets to release branch
         run: |
           cd output || exit 1
+
           git init
+
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git checkout -b release
+
           git add -A
+
           git commit -m "${{ env.RELEASE_NAME }}"
-          git remote add geoip "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
+          git remote add geoip \
+            "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
           git push -f -u geoip release
 
       - name: Purge jsdelivr CDN
         run: |
           cd output || exit 1
+
           for file in $(ls *.mmdb); do
-            curl -i "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
+            curl -i \
+              "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
           done
 
       - name: Delete old releases
