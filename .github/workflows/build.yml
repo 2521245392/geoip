@@ -55,7 +55,7 @@ jobs:
           echo "📥 2. 正在拉取纯物理大陆运营商 IPv6 路由段..."
           curl -sL "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt" > ./temp_cidr/raw_cn6.txt
 
-          echo "📝 3. 正在生成 IPv4 / IPv6 保留与私网 CIDR..."
+          echo "📝 3. 正在生成兼容性标准的 IPv4 / IPv6 保留与私网 CIDR..."
           cat << 'EOF' > ./temp_cidr/raw_private.txt
           0.0.0.0/8
           10.0.0.0/8
@@ -72,9 +72,6 @@ jobs:
           203.0.113.0/24
           224.0.0.0/4
           240.0.0.0/4
-          255.255.255.255/32
-          ::/128
-          ::1/128
           ::ffff:0:0/96
           64:ff9b::/96
           100::/64
@@ -85,7 +82,7 @@ jobs:
           ff00::/8
           EOF
 
-          echo "🧹 4. 清理空行、注释与非法空白，直接输出纯净底册..."
+          echo "🧹 4. 清理空行、注释与非法空白..."
           cat ./temp_cidr/raw_cn4.txt ./temp_cidr/raw_cn6.txt ./temp_cidr/raw_private.txt \
             | sed 's/[[:space:]]//g' \
             | grep -v '^#' \
