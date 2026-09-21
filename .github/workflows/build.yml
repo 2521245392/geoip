@@ -1,4 +1,5 @@
 name: Build geoip files
+
 on:
   workflow_dispatch:
   schedule:
@@ -15,6 +16,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v4
@@ -27,37 +29,45 @@ jobs:
           go-version-file: ./go.mod
 
       - name: Set variables
-        run: |
-          echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
-          echo "RELEASE_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
         shell: bash
+        run: |
+          echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=$(date +%Y%m%d%H%M)" >> "$GITHUB_ENV"
 
-      - name: Download GeoLite2 Databases
+      - name: Download GeoLite2 ASN Database
         env:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
           mkdir -p output
-          
-          # 下载 ASN 数据库备用
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
-          tar -xvzf ./output/GeoLite2-ASN.tar.gz -C ./output
-          mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
-          cp ./GeoLite2-ASN.mmdb ./output/ASN.mmdb
 
-      - name: Fetch and Merge Pure Physical China & Private CIDR
+          curl -L \
+          "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" \
+          -o output/GeoLite2-ASN.tar.gz
+
+          tar -xzf output/GeoLite2-ASN.tar.gz -C output
+
+          mv output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
+
+          cp GeoLite2-ASN.mmdb output/ASN.mmdb
+
+
+      - name: Fetch and Merge CIDR
         run: |
-          mkdir -p ./geolite2
-          mkdir -p ./tools_temp
-          mkdir -p ./data_temp
+          mkdir -p geolite2 tools_temp data_temp
 
-          echo "📥 1. 正在拉取国内骨干网 BGP 真实物理 IPv4 (chnroutes2)..."
-          curl -sL "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt" > ./data_temp/cn_ipv4.txt
+          echo "Downloading IPv4 CN routes..."
+          curl -sL \
+          https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt \
+          > data_temp/cn_ipv4.txt
 
-          echo "📥 2. 正在拉取真实大陆运营商 IPv6 路由段..."
-          curl -sL "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt" > ./data_temp/cn_ipv6.txt
 
-          echo "📝 3. 正在生成 IPv4 / IPv6 私网保留段..."
-          cat << 'EOF' > ./data_temp/private.txt
+          echo "Downloading IPv6 CN routes..."
+          curl -sL \
+          https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt \
+          > data_temp/cn_ipv6.txt
+
+
+          cat > data_temp/private.txt <<'EOF'
 0.0.0.0/8
 10.0.0.0/8
 100.64.0.0/10
@@ -86,122 +96,184 @@ fe80::/10
 ff00::/8
 EOF
 
-          echo "🧹 4. 汇聚并剔除无效字符..."
-          cat ./data_temp/cn_ipv4.txt ./data_temp/cn_ipv6.txt ./data_temp/private.txt \
-            | tr -d ' \t\r' \
-            | grep -v '^#' \
-            | grep -v '^$' > ./data_temp/all_cidr.txt
 
-          echo "待合并网段总数:"
-          wc -l ./data_temp/all_cidr.txt
+          cat \
+          data_temp/cn_ipv4.txt \
+          data_temp/cn_ipv6.txt \
+          data_temp/private.txt \
+          | tr -d ' \t\r' \
+          | grep -v '^#' \
+          | grep -v '^$' \
+          > data_temp/all_cidr.txt
 
-          echo "⚙️ 5. 在隔离子目录中执行聚合..."
+
+          echo "CIDR count:"
+          wc -l data_temp/all_cidr.txt
+
+
+          cd tools_temp
+
+          go mod init merge
           go get go4.org/netipx
 
-          cat << 'EOF' > ./tools_temp/do_merge.go
-          package main
 
-          import (
-          	"bufio"
-          	"fmt"
-          	"log"
-          	"net/netip"
-          	"os"
-          	"strings"
+          cat > do_merge.go <<'EOF'
+package main
 
-          	"go4.org/netipx"
-          )
+import (
+	"bufio"
+	"fmt"
+	"log"
+	"net/netip"
+	"os"
+	"strings"
 
-          func main() {
-          	file, err := os.Open("../data_temp/all_cidr.txt")
-          	if err != nil {
-          		log.Fatalf("无法读取文件: %v", err)
-          	}
-          	defer file.Close()
+	"go4.org/netipx"
+)
 
-          	var builder netipx.IPSetBuilder
-          	scanner := bufio.NewScanner(file)
-          	for scanner.Scan() {
-          		line := strings.TrimSpace(scanner.Text())
-          		if line == "" || strings.HasPrefix(line, "#") {
-          			continue
-          		}
-          		prefix, err := netip.ParsePrefix(line)
-          		if err == nil {
-          			builder.AddPrefix(prefix)
-          		}
-          	}
+func main() {
 
-          	ipSet, err := builder.IPSet()
-          	if err != nil {
-          		log.Fatalf("构建 IPSet 失败: %v", err)
-          	}
+	file, err := os.Open("../data_temp/all_cidr.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
 
-          	outFile, err := os.Create("../geolite2/chinamax_cidr.txt")
-          	if err != nil {
-          		log.Fatalf("写入目标文件失败: %v", err)
-          	}
-          	defer outFile.Close()
 
-          	prefixes := ipSet.Prefixes()
-          	for _, p := range prefixes {
-          		outFile.WriteString(p.String() + "\n")
-          	}
-          	fmt.Printf("✅ 聚合完毕！纯物理大陆+私网有效网段数: %d\n", len(prefixes))
-          }
-          EOF
+	var builder netipx.IPSetBuilder
 
-          # 进入隔离目录运行，并彻底清理临时工作区
-          (cd ./tools_temp && go run do_merge.go)
-          rm -rf ./tools_temp ./data_temp
 
-          echo "Cleaned CIDR count:"
-          wc -l ./geolite2/chinamax_cidr.txt
-          test -s ./geolite2/chinamax_cidr.txt
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		prefix, err := netip.ParsePrefix(line)
+
+		if err == nil {
+			builder.AddPrefix(prefix)
+		}
+	}
+
+
+	ipSet, err := builder.IPSet()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
+	out, err := os.Create("../geolite2/chinamax_cidr.txt")
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer out.Close()
+
+
+	prefixes := ipSet.Prefixes()
+
+	for _, p := range prefixes {
+		out.WriteString(p.String()+"\n")
+	}
+
+
+	fmt.Printf(
+		"merged prefixes: %d\n",
+		len(prefixes),
+	)
+}
+EOF
+
+
+          go run do_merge.go
+
+          cd ..
+
+          rm -rf tools_temp data_temp
+
+
+          wc -l geolite2/chinamax_cidr.txt
+
+          test -s geolite2/chinamax_cidr.txt
+
 
       - name: Build Country.mmdb
         run: |
-          go build ./
+          go build .
           ./geoip convert -c ./config.json
 
-      - name: Clean output directory
-        run: |
-          cd ./output || exit 1
-          find . -type f ! -name "ASN.mmdb" ! -name "Country.mmdb" -delete
 
-      - name: Verify mmdb files
-        run: |
-          cd ./output || exit 1
-          go install -v github.com/maxmind/mmdbverify@latest
-          for name in $(ls *.mmdb); do
-            $(go env GOPATH)/bin/mmdbverify -file ${name}
-          done
-
-      - name: Generate sha256 checksum
-        run: |
-          cd ./output || exit 1
-          for name in $(ls *.mmdb); do
-            sha256sum ${name} > ./${name}.sha256sum
-          done
-
-      - name: Git push assets to "release" branch
+      - name: Clean output
         run: |
           cd output || exit 1
+
+          find . \
+          -type f \
+          ! -name "ASN.mmdb" \
+          ! -name "Country.mmdb" \
+          -delete
+
+
+      - name: Verify mmdb
+        run: |
+          cd output || exit 1
+
+          go install github.com/maxmind/mmdbverify@latest
+
+          for file in *.mmdb
+          do
+            $(go env GOPATH)/bin/mmdbverify -file "$file"
+          done
+
+
+      - name: Generate SHA256
+        run: |
+          cd output || exit 1
+
+          for file in *.mmdb
+          do
+            sha256sum "$file" > "$file.sha256sum"
+          done
+
+
+      - name: Push release branch
+        run: |
+          cd output || exit 1
+
           git init
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git checkout -b release
-          git add -A
+
+          git add .
+
           git commit -m "${{ env.RELEASE_NAME }}"
-          git remote add geoip "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
+          git remote add geoip \
+          "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
           git push -f -u geoip release
+
 
       - name: Purge jsdelivr CDN
         run: |
           cd output || exit 1
-          for file in $(ls *.mmdb); do
-            curl -i "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
+
+          for file in *.mmdb
+          do
+            curl -i \
+            "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/$file"
           done
+
 
       - name: Delete old releases
         uses: dev-drprasad/delete-older-releases@v0.3.4
@@ -211,7 +283,8 @@ EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload files to GitHub release
+
+      - name: Upload GitHub Release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
