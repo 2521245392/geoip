@@ -44,7 +44,12 @@ jobs:
           mv ./output/GeoLite2-ASN_*/GeoLite2-ASN.mmdb ./GeoLite2-ASN.mmdb
           cp ./GeoLite2-ASN.mmdb ./output/ASN.mmdb
 
-      - name: Fetch Pure Physical China & Private CIDR
+      - name: Compile geoip binary
+        run: |
+          # 提前编译好主程序，直接使用其内置的 merge 功能
+          go build -o geoip ./
+
+      - name: Fetch and Merge Pure Physical China & Private CIDR
         run: |
           mkdir -p ./geolite2
           mkdir -p ./temp_cidr
@@ -87,67 +92,10 @@ jobs:
           ff00::/8
           EOF
 
-          # 合并原始源
-          cat ./temp_cidr/cn_ipv4.txt ./temp_cidr/cn_ipv6.txt ./temp_cidr/private_cidr.txt > ./temp_cidr/all_raw.txt
+          echo "⚙️ 4. 通过管道直接调用内置的 ./geoip merge 进行原生聚合..."
+          # 将所有段通过管道送入 ./geoip merge，处理后直接重定向写入目标文件
+          cat ./temp_cidr/cn_ipv4.txt ./temp_cidr/cn_ipv6.txt ./temp_cidr/private_cidr.txt | ./geoip merge > ./geolite2/chinamax_cidr.txt
 
-          echo "⚙️ 4. 正在执行 IP 验证与聚合 (去重、重叠网段合并)..."
-          go get go4.org/netipx
-
-          cat << 'EOF' > merge.go
-          package main
-
-          import (
-          	"bufio"
-          	"fmt"
-          	"log"
-          	"net/netip"
-          	"os"
-          	"strings"
-
-          	"go4.org/netipx"
-          )
-
-          func main() {
-          	file, err := os.Open("./temp_cidr/all_raw.txt")
-          	if err != nil {
-          		log.Fatalf("打开文件失败: %v", err)
-          	}
-          	defer file.Close()
-
-          	var builder netipx.IPSetBuilder
-          	scanner := bufio.NewScanner(file)
-          	for scanner.Scan() {
-          		line := strings.TrimSpace(scanner.Text())
-          		if line == "" || strings.HasPrefix(line, "#") {
-          			continue
-          		}
-          		prefix, err := netip.ParsePrefix(line)
-          		if err == nil {
-          			builder.AddPrefix(prefix)
-          		}
-          	}
-
-          	ipSet, err := builder.IPSet()
-          	if err != nil {
-          		log.Fatalf("构建 IPSet 失败: %v", err)
-          	}
-
-          	out, err := os.Create("./geolite2/chinamax_cidr.txt")
-          	if err != nil {
-          		log.Fatalf("创建目标文件失败: %v", err)
-          	}
-          	defer out.Close()
-
-          	prefixes := ipSet.Prefixes()
-          	for _, p := range prefixes {
-          		out.WriteString(p.String() + "\n")
-          	}
-          	fmt.Printf("✅ 网段聚合完毕，最终输出纯净段总数: %d\n", len(prefixes))
-          }
-          EOF
-
-          go run merge.go
-          rm merge.go
           rm -rf ./temp_cidr
 
           echo "Cleaned CIDR count:"
@@ -156,7 +104,6 @@ jobs:
 
       - name: Build Country.mmdb
         run: |
-          go build ./
           ./geoip convert -c ./config.json
 
       - name: Clean output directory
